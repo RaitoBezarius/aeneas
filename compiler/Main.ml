@@ -119,7 +119,7 @@ let () =
         Arg.Clear lean_gen_lakefile,
         " Generate a default lakefile.lean (Lean only)" );
       ("-print-llbc", Arg.Set print_llbc, " Print the imported LLBC");
-      ("-k", Arg.Clear fail_hard, " Do not fail hard in case of error");
+      ("-abort-on-error", Arg.Set fail_hard, " Fail hard (fail on first error) in case of error");
       ( "-split-fwd-back",
         Arg.Clear return_back_funs,
         " Split the forward and backward functions." );
@@ -276,7 +276,7 @@ let () =
       if !test_unit_functions then Test.test_unit_functions m;
 
       (* Translate the functions *)
-      Aeneas.Translate.translate_crate filename dest_dir m;
+      Aeneas.Translate.translate_crate meta filename dest_dir m;
 
       (* Print total elapsed time *)
       log#linfo

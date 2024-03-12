@@ -13,6 +13,7 @@ open Cps
 open InterpreterUtils
 open InterpreterBorrows
 open InterpreterLoopsCore
+open Errors
 module S = SynthesizeSymbolic
 
 (** The local logger *)
@@ -1388,7 +1389,7 @@ let ctxs_are_equivalent (fixed_ids : ids_sets) (ctx0 : eval_ctx)
     (match_ctxs check_equivalent fixed_ids lookup_shared_value
        lookup_shared_value ctx0 ctx1)
 
-let match_ctx_with_target (config : config) (loop_id : LoopId.id)
+let match_ctx_with_target (meta : Meta.meta) (config : config) (loop_id : LoopId.id)
     (is_loop_entry : bool) (fp_bl_maps : borrow_loan_corresp)
     (fp_input_svalues : SymbolicValueId.id list) (fixed_ids : ids_sets)
     (src_ctx : eval_ctx) : st_cm_fun =
@@ -1564,7 +1565,7 @@ let match_ctx_with_target (config : config) (loop_id : LoopId.id)
       let fixed_ids = ids_sets_empty_borrows_loans fixed_ids in
       let open InterpreterBorrowsCore in
       let lookup_shared_loan lid ctx : typed_value =
-        match snd (lookup_loan ek_all lid ctx) with
+        match snd (lookup_loan meta ek_all lid ctx) with
         | Concrete (VSharedLoan (_, v)) -> v
         | Abstract (ASharedLoan (_, v, _)) -> v
         | _ -> raise (Failure "Unreachable")
