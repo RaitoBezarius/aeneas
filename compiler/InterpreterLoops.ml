@@ -9,12 +9,13 @@ open InterpreterUtils
 open InterpreterLoopsCore
 open InterpreterLoopsMatchCtxs
 open InterpreterLoopsFixedPoint
+open Errors
 
 (** The local logger *)
 let log = Logging.loops_log
 
 (** Evaluate a loop in concrete mode *)
-let eval_loop_concrete (eval_loop_body : st_cm_fun) : st_cm_fun =
+let eval_loop_concrete (meta : Meta.meta) (eval_loop_body : st_cm_fun) : st_cm_fun =
  fun cf ctx ->
   (* We need a loop id for the [LoopReturn]. In practice it won't be used
      (it is useful only for the symbolic execution *)
@@ -51,10 +52,10 @@ let eval_loop_concrete (eval_loop_body : st_cm_fun) : st_cm_fun =
          * {!Unit} would account for the first iteration of the loop.
          * We prefer to write it this way for consistency and sanity,
          * though. *)
-        raise (Failure "Unreachable")
+        craise meta "Unreachable"
     | LoopReturn _ | EndEnterLoop _ | EndContinue _ ->
         (* We can't get there: this is only used in symbolic mode *)
-        raise (Failure "Unreachable")
+        craise meta "Unreachable"
   in
 
   (* Apply *)
@@ -66,24 +67,24 @@ let eval_loop_symbolic (config : config) (meta : meta)
  fun cf ctx ->
   (* Debug *)
   log#ldebug
-    (lazy ("eval_loop_symbolic:\nContext:\n" ^ eval_ctx_to_string ctx ^ "\n\n"));
+    (lazy ("eval_loop_symbolic:\nContext:\n" ^ eval_ctx_to_string meta ctx ^ "\n\n"));
 
   (* Generate a fresh loop id *)
   let loop_id = fresh_loop_id () in
 
   (* Compute the fixed point at the loop entrance *)
   let fp_ctx, fixed_ids, rg_to_abs =
-    compute_loop_entry_fixed_point config loop_id eval_loop_body ctx
+    compute_loop_entry_fixed_point meta config loop_id eval_loop_body ctx
   in
 
   (* Debug *)
   log#ldebug
     (lazy
-      ("eval_loop_symbolic:\nInitial context:\n" ^ eval_ctx_to_string ctx
-     ^ "\n\nFixed point:\n" ^ eval_ctx_to_string fp_ctx));
+      ("eval_loop_symbolic:\nInitial context:\n" ^ eval_ctx_to_string meta ctx
+     ^ "\n\nFixed point:\n" ^ eval_ctx_to_string meta fp_ctx));
 
   (* Compute the loop input parameters *)
-  let fresh_sids, input_svalues = compute_fp_ctx_symbolic_values ctx fp_ctx in
+  let fresh_sids, input_svalues = compute_fp_ctx_symbolic_values meta ctx fp_ctx in
   let fp_input_svalues = List.map (fun sv -> sv.sv_id) input_svalues in
 
   (* Synthesize the end of the function - we simply match the context at the
@@ -91,16 +92,16 @@ let eval_loop_symbolic (config : config) (meta : meta)
      will end with a call to the loop translation
   *)
   let fp_bl_corresp =
-    compute_fixed_point_id_correspondance fixed_ids ctx fp_ctx
+    compute_fixed_point_id_correspondance meta fixed_ids ctx fp_ctx
   in
   log#ldebug
     (lazy
       ("eval_loop_symbolic: about to match the fixed-point context with the \
         original context:\n\
-        - src ctx (fixed-point ctx)" ^ eval_ctx_to_string fp_ctx
-     ^ "\n\n-tgt ctx (original context):\n" ^ eval_ctx_to_string ctx));
+        - src ctx (fixed-point ctx)" ^ eval_ctx_to_string meta fp_ctx
+     ^ "\n\n-tgt ctx (original context):\n" ^ eval_ctx_to_string meta ctx));
   let end_expr : SymbolicAst.expression option =
-    match_ctx_with_target config loop_id true fp_bl_corresp fp_input_svalues
+    match_ctx_with_target meta config loop_id true fp_bl_corresp fp_input_svalues
       fixed_ids fp_ctx cf ctx
   in
   log#ldebug
@@ -124,15 +125,15 @@ let eval_loop_symbolic (config : config) (meta : meta)
         cf res ctx
     | Continue i ->
         (* We don't support nested loops for now *)
-        assert (i = 0);
+        cassert (i = 0) meta "Nested loops are not supported yet";
         log#ldebug
           (lazy
             ("eval_loop_symbolic: about to match the fixed-point context with \
               the context at a continue:\n\
-              - src ctx (fixed-point ctx)" ^ eval_ctx_to_string fp_ctx
-           ^ "\n\n-tgt ctx (ctx at continue):\n" ^ eval_ctx_to_string ctx));
+              - src ctx (fixed-point ctx)" ^ eval_ctx_to_string meta fp_ctx
+           ^ "\n\n-tgt ctx (ctx at continue):\n" ^ eval_ctx_to_string meta ctx));
         let cc =
-          match_ctx_with_target config loop_id false fp_bl_corresp
+          match_ctx_with_target meta config loop_id false fp_bl_corresp
             fp_input_svalues fixed_ids fp_ctx
         in
         cc cf ctx
@@ -140,16 +141,16 @@ let eval_loop_symbolic (config : config) (meta : meta)
         (* For why we can't get [Unit], see the comments inside {!eval_loop_concrete}.
            For [EndEnterLoop] and [EndContinue]: we don't support nested loops for now.
         *)
-        raise (Failure "Unreachable")
+        craise meta "Unreachable"
   in
   let loop_expr = eval_loop_body cf_loop fp_ctx in
 
   log#ldebug
     (lazy
       ("eval_loop_symbolic: result:" ^ "\n- src context:\n"
-      ^ eval_ctx_to_string_no_filter ctx
+      ^ eval_ctx_to_string_no_filter meta ctx
       ^ "\n- fixed point:\n"
-      ^ eval_ctx_to_string_no_filter fp_ctx
+      ^ eval_ctx_to_string_no_filter meta fp_ctx
       ^ "\n- fixed_sids: "
       ^ SymbolicValueId.Set.show fixed_ids.sids
       ^ "\n- fresh_sids: "
@@ -171,7 +172,7 @@ let eval_loop_symbolic (config : config) (meta : meta)
       match av.value with
       | ABorrow _ -> true
       | ALoan _ -> false
-      | _ -> raise (Failure "Unreachable")
+      | _ -> craise meta "Unreachable"
     in
     let borrows, loans = List.partition is_borrow abs.avalues in
 
@@ -180,10 +181,10 @@ let eval_loop_symbolic (config : config) (meta : meta)
         (fun (av : typed_avalue) ->
           match av.value with
           | ABorrow (AMutBorrow (bid, child_av)) ->
-              assert (is_aignored child_av.value);
+              cassert (is_aignored child_av.value) meta "TODO: error message";
               Some (bid, child_av.ty)
           | ABorrow (ASharedBorrow _) -> None
-          | _ -> raise (Failure "Unreachable"))
+          | _ -> craise meta "Unreachable")
         borrows
     in
     let borrows = ref (BorrowId.Map.of_list borrows) in
@@ -193,10 +194,10 @@ let eval_loop_symbolic (config : config) (meta : meta)
         (fun (av : typed_avalue) ->
           match av.value with
           | ALoan (AMutLoan (bid, child_av)) ->
-              assert (is_aignored child_av.value);
+              cassert (is_aignored child_av.value) meta "TODO: error message";
               Some bid
           | ALoan (ASharedLoan _) -> None
-          | _ -> raise (Failure "Unreachable"))
+          | _ -> craise meta "Unreachable")
         loans
     in
 
@@ -212,7 +213,7 @@ let eval_loop_symbolic (config : config) (meta : meta)
           ty)
         loan_ids
     in
-    assert (BorrowId.Map.is_empty !borrows);
+    cassert (BorrowId.Map.is_empty !borrows) meta "TODO: error message";
 
     (abs.regions, given_back_tys)
   in
@@ -228,7 +229,7 @@ let eval_loop (config : config) (meta : meta) (eval_loop_body : st_cm_fun) :
     st_cm_fun =
  fun cf ctx ->
   match config.mode with
-  | ConcreteMode -> eval_loop_concrete eval_loop_body cf ctx
+  | ConcreteMode -> eval_loop_concrete meta eval_loop_body cf ctx
   | SymbolicMode ->
       (* We want to make sure the loop will *not* manipulate shared avalues
          containing themselves shared loans (i.e., nested shared loans in
@@ -248,5 +249,5 @@ let eval_loop (config : config) (meta : meta) (eval_loop_body : st_cm_fun) :
          introduce *fixed* abstractions, and again later to introduce
          *non-fixed* abstractions.
       *)
-      let cc = prepare_ashared_loans None in
+      let cc = prepare_ashared_loans meta None in
       comp cc (eval_loop_symbolic config meta eval_loop_body) cf ctx

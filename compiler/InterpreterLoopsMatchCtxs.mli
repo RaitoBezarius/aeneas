@@ -19,7 +19,7 @@ open InterpreterLoopsCore
     - [env]
  *)
 val compute_abs_borrows_loans_maps :
-  bool -> (abs -> bool) -> env -> abs_borrows_loans_maps
+  Meta.meta -> bool -> (abs -> bool) -> env -> abs_borrows_loans_maps
 
 (** Generic functor to implement matching functions between values, environments,
     etc.
@@ -91,6 +91,7 @@ module MakeCheckEquivMatcher : functor (_ : MatchCheckEquivState) ->
     We return an optional ids map: [Some] if the match succeeded, [None] otherwise.
  *)
 val match_ctxs :
+  Meta.meta ->
   bool ->
   ids_sets ->
   (loan_id -> typed_value) ->
@@ -135,7 +136,7 @@ val match_ctxs :
     - [ctx0]
     - [ctx1]
  *)
-val ctxs_are_equivalent : ids_sets -> eval_ctx -> eval_ctx -> bool
+val ctxs_are_equivalent : Meta.meta -> ids_sets -> eval_ctx -> eval_ctx -> bool
 
 (** Match a context with a target context.
 
@@ -284,6 +285,7 @@ val ctxs_are_equivalent : ids_sets -> eval_ctx -> eval_ctx -> bool
    - [src_ctx]
  *)
 val match_ctx_with_target :
+  Meta.meta ->
   config ->
   loop_id ->
   bool ->

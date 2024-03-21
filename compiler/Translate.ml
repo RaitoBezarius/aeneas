@@ -21,7 +21,7 @@ type symbolic_fun_translation = symbolic_value list * SA.expression
 (** Execute the symbolic interpreter on a function to generate a list of symbolic ASTs,
     for the forward function and the backward functions.
 *)
-let translate_function_to_symbolics (meta : Meta.meta) (trans_ctx : trans_ctx) (fdef : fun_decl) :
+let translate_function_to_symbolics (trans_ctx : trans_ctx) (fdef : fun_decl) :
     symbolic_fun_translation option =
   (* Debug *)
   log#ldebug
@@ -33,7 +33,7 @@ let translate_function_to_symbolics (meta : Meta.meta) (trans_ctx : trans_ctx) (
   | Some _ ->
       (* Evaluate *)
       let synthesize = true in
-      let inputs, symb = evaluate_function_symbolic meta synthesize trans_ctx fdef in
+      let inputs, symb = evaluate_function_symbolic synthesize trans_ctx fdef in
       Some (inputs, Option.get symb)
 
 (** Translate a function, by generating its forward and backward translations.
@@ -42,7 +42,7 @@ let translate_function_to_symbolics (meta : Meta.meta) (trans_ctx : trans_ctx) (
     of backward functions, we also provide names for the outputs.
     TODO: maybe we should introduce a record for this.
 *)
-let translate_function_to_pure (meta : Meta.meta) (trans_ctx : trans_ctx)
+let translate_function_to_pure (trans_ctx : trans_ctx)
     (pure_type_decls : Pure.type_decl Pure.TypeDeclId.Map.t)
     (fun_dsigs : Pure.decomposed_fun_sig FunDeclId.Map.t) (fdef : fun_decl) :
     pure_fun_translation_no_loops =
@@ -53,7 +53,7 @@ let translate_function_to_pure (meta : Meta.meta) (trans_ctx : trans_ctx)
   let def_id = fdef.def_id in
 
   (* Compute the symbolic ASTs, if the function is transparent *)
-  let symbolic_trans = translate_function_to_symbolics meta trans_ctx fdef in
+  let symbolic_trans = translate_function_to_symbolics trans_ctx fdef in
 
   (* Convert the symbolic ASTs to pure ASTs: *)
 
@@ -122,7 +122,7 @@ let translate_function_to_pure (meta : Meta.meta) (trans_ctx : trans_ctx)
   in
 
   let sg =
-    SymbolicToPure.translate_fun_sig_from_decl_to_decomposed meta trans_ctx fdef
+    SymbolicToPure.translate_fun_sig_from_decl_to_decomposed trans_ctx fdef
   in
 
   let regions_hierarchy =
@@ -189,10 +189,10 @@ let translate_function_to_pure (meta : Meta.meta) (trans_ctx : trans_ctx)
         in
         let input_svs = List.combine forward_input_varnames input_svs in
         let ctx, forward_inputs =
-          SymbolicToPure.fresh_named_vars_for_symbolic_values meta input_svs ctx
+          SymbolicToPure.fresh_named_vars_for_symbolic_values input_svs ctx
         in
         { ctx with forward_inputs }
-    | _ -> craise meta "Unreachable"
+    | _ -> craise fdef.meta "Unreachable"
   in
 
   (* Add the backward inputs *)
@@ -229,8 +229,8 @@ let translate_function_to_pure (meta : Meta.meta) (trans_ctx : trans_ctx)
   (* Translate the forward function *)
   let pure_forward =
     match symbolic_trans with
-    | None -> SymbolicToPure.translate_fun_decl meta ctx None
-    | Some (_, ast) -> SymbolicToPure.translate_fun_decl meta ctx (Some ast)
+    | None -> SymbolicToPure.translate_fun_decl ctx None
+    | Some (_, ast) -> SymbolicToPure.translate_fun_decl ctx (Some ast)
   in
 
   (* Translate the backward functions, if we split the forward and backward functions *)
@@ -238,7 +238,7 @@ let translate_function_to_pure (meta : Meta.meta) (trans_ctx : trans_ctx)
     (* For the backward inputs/outputs initialization: we use the fact that
      * there are no nested borrows for now, and so that the region groups
      * can't have parents *)
-    cassert (rg.parents = []) meta "The region can't have parents because nested borrows are not supported yet";
+    cassert (rg.parents = []) ctx.fun_decl.meta "The region can't have parents because nested borrows are not supported yet";
     let back_id = rg.id in
 
     match symbolic_trans with
@@ -246,12 +246,12 @@ let translate_function_to_pure (meta : Meta.meta) (trans_ctx : trans_ctx)
         (* Initialize the context *)
         let ctx = { ctx with bid = Some back_id } in
         (* Translate *)
-        SymbolicToPure.translate_fun_decl meta ctx None
+        SymbolicToPure.translate_fun_decl ctx None
     | Some (_, symbolic) ->
         (* Initialize the context *)
         let ctx = { ctx with bid = Some back_id } in
         (* Translate *)
-        SymbolicToPure.translate_fun_decl meta ctx (Some symbolic)
+        SymbolicToPure.translate_fun_decl ctx (Some symbolic)
   in
   let pure_backwards =
     if !Config.return_back_funs then []
@@ -262,7 +262,7 @@ let translate_function_to_pure (meta : Meta.meta) (trans_ctx : trans_ctx)
   (pure_forward, pure_backwards)
 
 (* TODO: factor out the return type *)
-let translate_crate_to_pure (meta : Meta.meta) (crate : crate) :
+let translate_crate_to_pure (crate : crate) :
     trans_ctx
     * Pure.type_decl list
     * pure_fun_translation list
@@ -275,7 +275,7 @@ let translate_crate_to_pure (meta : Meta.meta) (crate : crate) :
   let trans_ctx = compute_contexts crate in
 
   (* Translate all the type definitions *)
-  let type_decls = SymbolicToPure.translate_type_decls meta trans_ctx in
+  let type_decls = SymbolicToPure.translate_type_decls trans_ctx in
 
   (* Compute the type definition map *)
   let type_decls_map =
@@ -289,7 +289,7 @@ let translate_crate_to_pure (meta : Meta.meta) (crate : crate) :
       (List.map
          (fun (fdef : LlbcAst.fun_decl) ->
            ( fdef.def_id,
-             SymbolicToPure.translate_fun_sig_from_decl_to_decomposed meta trans_ctx
+             SymbolicToPure.translate_fun_sig_from_decl_to_decomposed trans_ctx
                fdef ))
          (FunDeclId.Map.values crate.fun_decls))
   in
@@ -297,21 +297,21 @@ let translate_crate_to_pure (meta : Meta.meta) (crate : crate) :
   (* Translate all the *transparent* functions *)
   let pure_translations =
     List.map
-      (translate_function_to_pure meta trans_ctx type_decls_map fun_dsigs)
+      (translate_function_to_pure trans_ctx type_decls_map fun_dsigs)
       (FunDeclId.Map.values crate.fun_decls)
   in
 
   (* Translate the trait declarations *)
   let trait_decls =
     List.map
-      (SymbolicToPure.translate_trait_decl meta trans_ctx)
+      (SymbolicToPure.translate_trait_decl trans_ctx)
       (TraitDeclId.Map.values trans_ctx.trait_decls_ctx.trait_decls)
   in
 
   (* Translate the trait implementations *)
   let trait_impls =
     List.map
-      (SymbolicToPure.translate_trait_impl meta trans_ctx)
+      (SymbolicToPure.translate_trait_impl trans_ctx)
       (TraitImplId.Map.values trans_ctx.trait_impls_ctx.trait_impls)
   in
 
@@ -421,7 +421,7 @@ let export_type (fmt : Format.formatter) (config : gen_config) (ctx : gen_ctx)
  *)
 let export_types_group (meta : Meta.meta) (fmt : Format.formatter) (config : gen_config)
     (ctx : gen_ctx) (is_rec : bool) (ids : Pure.TypeDeclId.id list) : unit =
-  cassert (ids <> []) meta "TODO: Error message";
+  assert (ids <> []) (* meta "TODO: Error message" *);
   let export_type = export_type fmt config ctx in
   let ids_set = Pure.TypeDeclId.Set.of_list ids in
   let export_type_decl kind id = export_type ids_set kind id true false in
@@ -463,11 +463,11 @@ let export_types_group (meta : Meta.meta) (fmt : Format.formatter) (config : gen
 
   if List.exists (fun b -> b) builtin then
     (* Sanity check *)
-    cassert (List.for_all (fun b -> b) builtin) meta "TODO: Error message"
+    assert (List.for_all (fun b -> b) builtin) (* meta "TODO: Error message" *)
   else if List.exists dont_extract defs then
     (* Check if we have to ignore declarations *)
     (* Sanity check *)
-    cassert (List.for_all dont_extract defs) meta "TODO: Error message"
+    assert (List.for_all dont_extract defs) (* meta "TODO: Error message" *)
   else (
     (* Extract the type declarations.
 
@@ -509,13 +509,13 @@ let export_types_group (meta : Meta.meta) (fmt : Format.formatter) (config : gen
 
     TODO: check correct behavior with opaque globals.
  *)
-let export_global (meta : Meta.meta) (fmt : Format.formatter) (config : gen_config) (ctx : gen_ctx)
+let export_global (fmt : Format.formatter) (config : gen_config) (ctx : gen_ctx)
     (id : GlobalDeclId.id) : unit =
   let global_decls = ctx.trans_ctx.global_ctx.global_decls in
   let global = GlobalDeclId.Map.find id global_decls in
   let trans = FunDeclId.Map.find global.body ctx.trans_funs in
-  cassert (trans.fwd.loops = []) meta "TODO: Error message";
-  cassert (trans.backs = []) meta "TODO: Error message";
+  cassert (trans.fwd.loops = []) global.meta "TODO: Error message";
+  cassert (trans.backs = []) global.meta "TODO: Error message";
   let body = trans.fwd.f in
 
   let is_opaque = Option.is_none body.Pure.body in
@@ -739,7 +739,7 @@ let export_trait_decl (fmt : Format.formatter) (_config : gen_config)
   let open ExtractBuiltin in
   if
     match_name_find_opt ctx.trans_ctx trait_decl.llbc_name
-      (builtin_trait_decls_map ())
+      (builtin_trait_decls_map trait_decl.meta ())
     = None
   then (
     let ctx = { ctx with trait_decl_id = Some trait_decl.def_id } in
@@ -783,7 +783,7 @@ let extract_definitions (meta : Meta.meta) (fmt : Format.formatter) (config : ge
        the [Arguments] information in Coq).
   *)
   let export_functions_group = export_functions_group meta fmt config ctx in
-  let export_global = export_global meta fmt config ctx in
+  let export_global = export_global fmt config ctx in
   let export_types_group = export_types_group meta fmt config ctx in
   let export_trait_decl_group id =
     export_trait_decl fmt config ctx id true false
@@ -797,7 +797,7 @@ let extract_definitions (meta : Meta.meta) (fmt : Format.formatter) (config : ge
     let kind =
       if config.interface then ExtractBase.Declared else ExtractBase.Assumed
     in
-    Extract.extract_state_type fmt ctx kind
+    Extract.extract_state_type meta fmt ctx kind
   in
 
   let export_decl_group (dg : declaration_group) : unit =
@@ -986,17 +986,17 @@ let extract_file (meta : Meta.meta) (config : gen_config) (ctx : gen_ctx) (fi : 
   close_out out
 
 (** Translate a crate and write the synthesized code to an output file. *)
-let translate_crate (meta : Meta.meta) (filename : string) (dest_dir : string) (crate : crate) :
+let translate_crate (filename : string) (dest_dir : string) (crate : crate) :
     unit =
   (* Translate the module to the pure AST *)
   let trans_ctx, trans_types, trans_funs, trans_trait_decls, trans_trait_impls =
-    translate_crate_to_pure meta crate
+    translate_crate_to_pure crate
   in
 
   (* Initialize the names map by registering the keywords used in the
      language, as well as some primitive names ("u32", etc.).
      We insert the names of the local declarations later. *)
-  let names_maps = Extract.initialize_names_maps () in
+  let names_maps = Extract.initialize_names_maps () in (*TODO*)
 
   (* We need to compute which functions are recursive, in order to know
    * whether we should generate a decrease clause or not. *)
@@ -1121,7 +1121,7 @@ let translate_crate (meta : Meta.meta) (filename : string) (dest_dir : string) (
     match Filename.chop_suffix_opt ~suffix:".llbc" filename with
     | None ->
         (* Note that we already checked the suffix upon opening the file *)
-        craise meta "Unreachable"
+        raise (Failure "Unreachable") (* TODO check *)
     | Some filename ->
         (* Retrieve the file basename *)
         let basename = Filename.basename filename in
@@ -1163,7 +1163,7 @@ let translate_crate (meta : Meta.meta) (filename : string) (dest_dir : string) (
     let ( ^^ ) = Filename.concat in
     if !Config.split_files then mkdir_if (dest_dir ^^ crate_name);
     if needs_clauses_module then (
-      cassert !Config.split_files meta "TODO: Error message";
+      assert !Config.split_files (* meta "TODO: Error message META?" *);
       mkdir_if (dest_dir ^^ crate_name ^^ "Clauses")));
 
   (* Copy the "Primitives" file, if necessary *)

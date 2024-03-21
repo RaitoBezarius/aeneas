@@ -1,6 +1,7 @@
 (** Utilities for extracting names *)
 
 open Charon.NameMatcher
+open Errors
 
 let log = Logging.extract_log
 let match_with_trait_decl_refs = true
@@ -31,7 +32,7 @@ end
     For impl blocks, we simply use the name of the type (without its arguments)
     if all the arguments are variables.
  *)
-let pattern_to_extract_name (is_trait_impl : bool) (name : pattern) :
+let pattern_to_extract_name ?(meta = None) (is_trait_impl : bool) (name : pattern) :
     string list =
   let c = { tgt = TkName } in
   let is_var (g : generic_arg) : bool =
@@ -52,7 +53,7 @@ let pattern_to_extract_name (is_trait_impl : bool) (name : pattern) :
             match id with
             | PIdent (s, g) ->
                 if all_vars g then s else pattern_elem_to_string c id
-            | PImpl _ -> raise (Failure "Unreachable"))
+            | PImpl _ -> craise_opt_meta meta "Unreachable")
         | EPrimAdt (adt, g) ->
             if all_vars g then
               match adt with
@@ -69,7 +70,7 @@ let pattern_to_extract_name (is_trait_impl : bool) (name : pattern) :
   in
   let rec pattern_to_string (n : pattern) : string list =
     match n with
-    | [] -> raise (Failure "Unreachable")
+    | [] -> craise_opt_meta meta "Unreachable"
     | [ e ] ->
         let e = elem_to_string e in
         if is_trait_impl then [ e ^ "Inst" ] else [ e ]
