@@ -472,6 +472,8 @@ def Scalar.or {ty : ScalarTy} (x : Scalar ty) (y : Scalar ty) : Scalar ty :=
 def Scalar.cast {src_ty : ScalarTy} (tgt_ty : ScalarTy) (x : Scalar src_ty) : Result (Scalar tgt_ty) :=
   Scalar.tryMk tgt_ty x.val
 
+def Scalar.cut {src_ty: ScalarTy} (tgt_ty: ScalarTy) (x: Scalar src_ty) : Result (Scalar tgt_ty) := Scalar.cast tgt_ty x
+
 -- This can't fail, but for now we make all casts faillible (easier for the translation)
 def Scalar.cast_bool (tgt_ty : ScalarTy) (x : Bool) : Result (Scalar tgt_ty) :=
   Scalar.tryMk tgt_ty (if x then 1 else 0)
