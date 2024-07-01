@@ -33,6 +33,9 @@ inductive TheoremOrLocal where
 | Theorem (thName : Name)
 | Local (asm : LocalDecl)
 
+structure Stats where
+  usedTheorem : TheoremOrLocal
+
 instance : ToMessageData TheoremOrLocal where
   toMessageData := λ x => match x with | .Theorem thName => m!"{thName}" | .Local asm => m!"{asm.userName}"
 
@@ -234,7 +237,7 @@ def tryLookupApply (keep : Option Name) (ids : Array (Option Name)) (splitPost :
 
 -- The array of ids are identifiers to use when introducing fresh variables
 def progressAsmsOrLookupTheorem (keep : Option Name) (withTh : Option TheoremOrLocal)
-  (ids : Array (Option Name)) (splitPost : Bool) (asmTac : TacticM Unit) : TacticM Unit := do
+  (ids : Array (Option Name)) (splitPost : Bool) (asmTac : TacticM Unit) : TacticM TheoremOrLocal := do
   withMainContext do
   -- Retrieve the goal
   let mgoal ← Tactic.getMainGoal
@@ -262,7 +265,7 @@ def progressAsmsOrLookupTheorem (keep : Option Name) (withTh : Option TheoremOrL
   match withTh with
   | some th => do
     match ← progressWith fExpr th keep ids splitPost asmTac with
-    | .Ok => return ()
+    | .Ok => return th
     | .Error msg => throwError msg
   | none =>
     -- Try all the assumptions one by one and if it fails try to lookup a theorem.
@@ -272,7 +275,7 @@ def progressAsmsOrLookupTheorem (keep : Option Name) (withTh : Option TheoremOrL
       trace[Progress] "Trying assumption: {decl.userName} : {decl.type}"
       let res ← do try progressWith fExpr (.Local decl) keep ids splitPost asmTac catch _ => continue
       match res with
-      | .Ok => return ()
+      | .Ok => return (.Local decl)
       | .Error msg => throwError msg
     -- It failed: lookup the pspec theorems which match the expression *only
     -- if the function is a constant*
@@ -293,7 +296,7 @@ def progressAsmsOrLookupTheorem (keep : Option Name) (withTh : Option TheoremOrL
         pure (thNames.map fun th => TheoremOrLocal.Theorem th)
       -- Try the theorems one by one
       for pspec in pspecs do
-        if ← tryLookupApply keep ids splitPost asmTac fExpr "pspec theorem" pspec then return ()
+        if ← tryLookupApply keep ids splitPost asmTac fExpr "pspec theorem" pspec then return pspec
         else pure ()
       -- It failed: try to use the recursive assumptions
       trace[Progress] "Failed using a pspec theorem: trying to use a recursive assumption"
@@ -306,14 +309,14 @@ def progressAsmsOrLookupTheorem (keep : Option Name) (withTh : Option TheoremOrL
         trace[Progress] "Trying recursive assumption: {decl.userName} : {decl.type}"
         let res ← do try progressWith fExpr (.Local decl) keep ids splitPost asmTac catch _ => continue
         match res with
-        | .Ok => return ()
+        | .Ok => return (.Local decl)
         | .Error msg => throwError msg
       -- Nothing worked: failed
       throwError "Progress failed"
 
 syntax progressArgs := ("keep" (ident <|> "_"))? ("with" ident)? ("as" " ⟨ " (ident <|> "_"),* " .."? " ⟩")?
 
-def evalProgress (args : TSyntax `Progress.progressArgs) : TacticM Unit := do
+def evalProgress (args : TSyntax `Progress.progressArgs) : TacticM Stats := do
   let args := args.raw
   -- Process the arguments to retrieve the identifiers to use
   trace[Progress] "Progress arguments: {args}"
@@ -370,14 +373,22 @@ def evalProgress (args : TSyntax `Progress.progressArgs) : TacticM Unit := do
       Arith.scalarTac false
     else
       throwError "Not a linear arithmetic goal"
-  progressAsmsOrLookupTheorem keep withArg ids splitPost (
+  let usedTheorem ← progressAsmsOrLookupTheorem keep withArg ids splitPost (
     withMainContext do
     trace[Progress] "trying to solve assumption: {← getMainGoal}"
     firstTac [assumptionTac, scalarTac])
-  trace[Diverge] "Progress done"
+  trace[Progress] "Progress done"
+  return {
+    usedTheorem := usedTheorem
+  }
 
 elab "progress" args:progressArgs : tactic =>
-  evalProgress args
+  evalProgress args *> return ()
+
+elab "progress?" args:progressArgs : tactic => do
+  let stats ← evalProgress args
+  -- TODO: grab the syntax element to reproduce the full invocation.
+  logInfo m!"Try this: progress with {stats.usedTheorem}"
 
 namespace Test
   open Primitives Result
@@ -396,6 +407,13 @@ namespace Test
     ∃ z, x + y = ok z ∧ z.val = x.val + y.val := by
     progress keep _ as ⟨ z, h1 .. ⟩
     simp [*, h1]
+
+  example {ty} {x y : Scalar ty}
+    (hmin : Scalar.min ty ≤ x.val + y.val)
+    (hmax : x.val + y.val ≤ Scalar.max ty) :
+    ∃ z, x + y = ok z ∧ z.val = x.val + y.val := by
+    progress? keep _ as ⟨ z, h1 .. ⟩ says progress with Primitives.Scalar.add_spec
+    sorry
 
   example {ty} {x y : Scalar ty}
     (hmin : Scalar.min ty ≤ x.val + y.val)
